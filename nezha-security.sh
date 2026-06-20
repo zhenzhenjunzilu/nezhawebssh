@@ -1,16 +1,8 @@
-
----
-
-## nezha-security.sh
-
-```bash
 #!/bin/bash
 
 set -e
 
-
-VERSION="1.0.0"
-
+VERSION="1.1.0"
 
 if [ "$EUID" -ne 0 ]; then
     echo "请使用 root 运行"
@@ -18,55 +10,45 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 
-echo "
-=================================
- Nezha Agent Security Tool
- Version $VERSION
-=================================
-"
+echo "================================="
+echo " Nezha Agent Security Tool"
+echo " Version $VERSION"
+echo "================================="
+echo
 
 
-echo "[+] 搜索运行中的 Agent"
+echo "[1] 检查运行中的 nezha-agent"
+echo
 
-agents=$(pgrep -af nezha-agent || true)
-
-
-if [ -z "$agents" ]; then
-    echo "未发现运行中的 Agent"
-else
-    echo "$agents"
-fi
+ps aux | grep "[n]ezha-agent" || echo "未发现运行中的 Agent"
 
 
 echo
-echo "[+] 扫描配置文件"
+echo "[2] 扫描 Nezha 配置文件"
+echo
 
 
 configs=$(find /opt /etc /root \
--name "config*.yml" \
--o -name "config*.yaml" \
+-type f \
+\( -name "config*.yml" -o -name "config*.yaml" \) \
 2>/dev/null | grep nezha || true)
 
 
 if [ -z "$configs" ]; then
 
-    echo "没有找到配置"
+    echo "没有找到 Agent 配置文件"
 
 else
-
 
 for file in $configs
 do
 
-echo "
---------------------------
-$file
-"
+echo "------------------------------"
+echo "配置: $file"
 
 grep -E \
 "server:|uuid:|disable_command_execute:" \
-$file || true
-
+"$file" || true
 
 done
 
@@ -74,23 +56,18 @@ fi
 
 
 echo
-echo "[+] systemd 服务"
+echo "[3] systemd 中的 Nezha 服务"
+echo
 
 
-services=$(systemctl list-units \
+systemctl list-units \
 --type=service \
---all \
-| grep -i nezha \
-|| true)
-
-
-echo "$services"
+--all | grep -i nezha || echo "没有发现 Nezha service"
 
 
 
 echo
-read -p \
-"是否开启所有 Agent 禁止命令执行? [y/N] " ans
+read -p "是否开启所有 Agent 禁止 WebSSH 命令执行? [y/N]: " ans
 
 
 if [[ "$ans" =~ ^[Yy]$ ]]
@@ -99,99 +76,131 @@ then
 for file in $configs
 do
 
-if grep -q "disable_command_execute:" "$file"
-then
+    if grep -q "disable_command_execute:" "$file"
+    then
 
-sed -i \
-'s/disable_command_execute:.*/disable_command_execute: true/' \
-"$file"
+        sed -i \
+        's/disable_command_execute:.*/disable_command_execute: true/' \
+        "$file"
+
+    else
+
+        echo "disable_command_execute: true" >> "$file"
+
+    fi
+
+
+    echo "已修改: $file"
+
+done
 
 else
 
-echo \
-"disable_command_execute: true" >> "$file"
-
-fi
-
-
-echo "修改: $file"
-
-done
+echo "跳过配置修改"
 
 fi
 
 
 
 echo
-read -p \
-"是否停止多余 nezha-agent 服务? [y/N] " clean
+read -p "是否停止多余 Nezha Agent 服务? [y/N]: " clean
 
 
 if [[ "$clean" =~ ^[Yy]$ ]]
 then
 
 
-for service in $(systemctl list-units \
+services=$(systemctl list-units \
 --type=service \
 --all \
 | grep -i nezha-agent \
-| awk '{print $1}')
+| awk '{print $1}' || true)
+
+
+for service in $services
 do
 
-if [ "$service" != "nezha-agent.service" ]
-then
+    if [ "$service" != "nezha-agent.service" ]
+    then
 
-echo "停止 $service"
+        echo "停止: $service"
 
-systemctl stop "$service" || true
+        systemctl stop "$service" 2>/dev/null || true
 
-systemctl disable "$service" || true
+        systemctl disable "$service" 2>/dev/null || true
 
-fi
+    fi
 
 done
 
+
+else
+
+echo "跳过服务清理"
 
 fi
 
 
 
 echo
-echo "[+] 清理残留进程"
+echo "[4] 检查残留进程"
+echo
 
 
-main=$(systemctl show \
--p MainPID \
---value \
+main_pid=$(systemctl show \
 nezha-agent.service \
-2>/dev/null || echo 0)
+-p MainPID \
+--value 2>/dev/null || echo 0)
 
 
 for pid in $(pgrep nezha-agent || true)
 do
 
-if [ "$pid" != "$main" ]
-then
+    if [ "$pid" != "$main_pid" ]
+    then
 
-echo "停止旧 Agent PID=$pid"
+        echo "停止旧 Agent PID=$pid"
 
-kill "$pid" || true
+        kill "$pid" 2>/dev/null || true
 
-fi
+    else
+
+        echo "保留主 Agent PID=$pid"
+
+    fi
 
 done
 
 
 
+echo
+echo "[5] 重载并重启主 Agent"
+
+
 systemctl daemon-reload
 
-systemctl restart nezha-agent || true
+
+if systemctl restart nezha-agent
+then
+
+    echo "nezha-agent 重启成功"
+
+else
+
+    echo "未发现 nezha-agent.service 或启动失败"
+
+fi
 
 
 
 echo
-echo "完成"
+echo "================================="
+echo " 完成"
+echo "================================="
+
 
 echo
-echo "当前 Agent:"
-pgrep -af nezha-agent || true
+echo "当前运行中的 Agent:"
+echo
+
+ps aux | grep "[n]ezha-agent" || echo "没有运行中的 Agent"
