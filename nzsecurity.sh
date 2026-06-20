@@ -2,7 +2,8 @@
 
 set -e
 
-VERSION="1.1.0"
+VERSION="1.2.0"
+
 
 if [ "$EUID" -ne 0 ]; then
     echo "请使用 root 运行"
@@ -17,14 +18,16 @@ echo "================================="
 echo
 
 
-echo "[1] 检查运行中的 nezha-agent"
+echo "[1] 检查运行中的 Agent"
 echo
+
 
 ps aux | grep "[n]ezha-agent" || echo "未发现运行中的 Agent"
 
 
+
 echo
-echo "[2] 扫描 Nezha 配置文件"
+echo "[2] 搜索配置文件"
 echo
 
 
@@ -34,17 +37,20 @@ configs=$(find /opt /etc /root \
 2>/dev/null | grep nezha || true)
 
 
+
 if [ -z "$configs" ]; then
 
-    echo "没有找到 Agent 配置文件"
+    echo "没有找到 Nezha 配置文件"
 
 else
+
 
 for file in $configs
 do
 
-echo "------------------------------"
-echo "配置: $file"
+echo "--------------------------------"
+echo "配置文件:"
+echo "$file"
 
 grep -E \
 "server:|uuid:|disable_command_execute:" \
@@ -52,58 +58,72 @@ grep -E \
 
 done
 
+
 fi
 
 
+
 echo
-echo "[3] systemd 中的 Nezha 服务"
+echo "[3] systemd Nezha 服务"
 echo
 
 
 systemctl list-units \
 --type=service \
---all | grep -i nezha || echo "没有发现 Nezha service"
+--all | grep -i nezha || echo "没有发现服务"
 
 
 
 echo
-read -p "是否开启所有 Agent 禁止 WebSSH 命令执行? [y/N]: " ans
+echo "================================="
+echo "安全修复"
+echo "================================="
+echo
+
+
+read -p "是否关闭所有 Agent 的 WebSSH 命令执行? [y/N]: " ans < /dev/tty
 
 
 if [[ "$ans" =~ ^[Yy]$ ]]
 then
 
+
 for file in $configs
 do
 
-    if grep -q "disable_command_execute:" "$file"
-    then
 
-        sed -i \
-        's/disable_command_execute:.*/disable_command_execute: true/' \
-        "$file"
+if grep -q "disable_command_execute:" "$file"
+then
 
-    else
-
-        echo "disable_command_execute: true" >> "$file"
-
-    fi
-
-
-    echo "已修改: $file"
-
-done
+    sed -i \
+    's/disable_command_execute:.*/disable_command_execute: true/' \
+    "$file"
 
 else
 
-echo "跳过配置修改"
+    echo "disable_command_execute: true" >> "$file"
+
+fi
+
+
+echo "已修改:"
+echo "$file"
+
+
+done
+
+
+else
+
+echo "跳过 WebSSH 禁用"
 
 fi
 
 
 
+
 echo
-read -p "是否停止多余 Nezha Agent 服务? [y/N]: " clean
+read -p "是否清理多余 Nezha Agent 服务? [y/N]: " clean < /dev/tty
 
 
 if [[ "$clean" =~ ^[Yy]$ ]]
@@ -117,21 +137,29 @@ services=$(systemctl list-units \
 | awk '{print $1}' || true)
 
 
+
 for service in $services
 do
 
-    if [ "$service" != "nezha-agent.service" ]
-    then
 
-        echo "停止: $service"
+if [ "$service" != "nezha-agent.service" ]
+then
 
-        systemctl stop "$service" 2>/dev/null || true
 
-        systemctl disable "$service" 2>/dev/null || true
+echo "停止:"
+echo "$service"
 
-    fi
+
+systemctl stop "$service" || true
+
+systemctl disable "$service" || true
+
+
+fi
+
 
 done
+
 
 
 else
@@ -142,9 +170,11 @@ fi
 
 
 
+
 echo
-echo "[4] 检查残留进程"
+echo "[4] 检查残留 Agent 进程"
 echo
+
 
 
 main_pid=$(systemctl show \
@@ -153,28 +183,35 @@ nezha-agent.service \
 --value 2>/dev/null || echo 0)
 
 
+
 for pid in $(pgrep nezha-agent || true)
 do
 
-    if [ "$pid" != "$main_pid" ]
-    then
 
-        echo "停止旧 Agent PID=$pid"
+if [ "$pid" != "$main_pid" ]
+then
 
-        kill "$pid" 2>/dev/null || true
+echo "停止旧 Agent PID=$pid"
 
-    else
+kill "$pid" || true
 
-        echo "保留主 Agent PID=$pid"
 
-    fi
+else
+
+echo "保留主 Agent PID=$pid"
+
+
+fi
+
 
 done
 
 
 
+
 echo
-echo "[5] 重载并重启主 Agent"
+echo "[5] 重启主 Agent"
+echo
 
 
 systemctl daemon-reload
@@ -183,24 +220,39 @@ systemctl daemon-reload
 if systemctl restart nezha-agent
 then
 
-    echo "nezha-agent 重启成功"
+echo "nezha-agent 重启成功"
 
 else
 
-    echo "未发现 nezha-agent.service 或启动失败"
+echo "未发现 nezha-agent.service"
 
 fi
 
 
 
+
 echo
 echo "================================="
-echo " 完成"
+echo "完成"
 echo "================================="
 
 
 echo
-echo "当前运行中的 Agent:"
+echo "当前 Agent:"
 echo
 
-ps aux | grep "[n]ezha-agent" || echo "没有运行中的 Agent"
+
+ps aux | grep "[n]ezha-agent" || echo "无运行 Agent"
+
+
+echo
+echo "WebSSH 状态:"
+echo
+
+
+for file in $configs
+do
+
+grep disable_command_execute "$file" 2>/dev/null || true
+
+done
